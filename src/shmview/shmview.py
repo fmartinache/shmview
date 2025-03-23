@@ -41,6 +41,9 @@ def main():
     global myqt
     myqt = QtMain()
     gui = MyWindow()
+
+    proxy = pg.SignalProxy(gui.gView_shm.scene().sigMouseMoved,
+                           rateLimit=60, slot=gui.mouseMoved)
     myqt.mainloop()
     myqt.gui_quit()
     sys.exit()
@@ -49,6 +52,9 @@ def main():
 # =====================================================================
 #                               Tools
 # =====================================================================
+def bound(val, low, high):
+    return max(low, min(high, val))
+
 def arr2im(arr, vmin=False, vmax=False, pwr=1.0, cmap=None, gamma=1.0):
     ''' --------------------------------------------------------
     convert 2D numpy array into image for display
@@ -91,6 +97,9 @@ class MyWindow(QMainWindow):
         self.required_slice = -1
         self.averaging = False
 
+        self.pyi, self.pxi = 0, 0
+        self.pxval = 0.0
+
         super(MyWindow, self).__init__()
         if not os.path.exists(conf_dir + 'shmimview.ui'):
             uic.loadUi('shmimview.ui', self)
@@ -106,6 +115,12 @@ class MyWindow(QMainWindow):
         self.imv_data = pg.ImageItem()
         self.overlay = pg.GraphItem()
         self.gView_shm.addItem(self.imv_data)
+
+        # cross-hair
+        self.vline = pg.InfiniteLine(angle=90, movable=False)
+        self.hline = pg.InfiniteLine(angle=0, movable=False)
+        self.gView_shm.addItem(self.vline, ignoreBounds=True)
+        self.gView_shm.addItem(self.hline, ignoreBounds=True)
 
         # ==============================================
         #             GUI widget actions
@@ -176,6 +191,18 @@ class MyWindow(QMainWindow):
         sys.exit()
 
     # =========================================================
+    def mouseMoved(self, evt):
+        pos = evt[0]
+        if self.gView_shm.sceneBoundingRect().contains(pos):
+            # print(pos)
+            mousePoint = self.gView_shm.getPlotItem().vb.mapSceneToView(pos)
+            self.vline.setPos(mousePoint.x())
+            self.hline.setPos(mousePoint.y())
+            yi, xi = int(mousePoint.y()), int(mousePoint.x())
+            self.pyi = bound(yi, 0, self.imsize[0]-1)
+            self.pxi = bound(xi, 0, self.imsize[1]-1)
+
+    # =========================================================
     def update_cbar(self):
         cbar = str(self.cmB_cbar.currentText()).lower()
         try:
@@ -238,6 +265,8 @@ class MyWindow(QMainWindow):
                                       pwr=self.pwr,
                                       cmap=self.mycmap), border=2)
 
+        self.pxval = self.data_img[self.pyi, self.pxi]
+
     # =========================================================
     def refresh_stats(self, add_msg=None):
 
@@ -247,27 +276,32 @@ class MyWindow(QMainWindow):
         msg = "<pre>\n"
 
         self.mySHM.read_keywords()
-        if self.naxis == 3:
-            msg += "imsize = %d x %d x %d\n\n" % self.mySHM.mtdata["size"]
+        sz = self.mySHM.mtdata["size"]
+        if self.naxis == 2:
+            msg += f"imsize = {sz[1]:3d} x {sz[2]:3d}"
         else:
-            msg += "imsize = %d x %d\n" % self.mySHM.mtdata["size"][1:]
+            msg += f"imsize = {sz[0]:3d} x {sz[1]:3d} x {sz[2]:3d}"
+
+        msg += f"\n\ncross-hair ({self.pxi:3d}, {self.pyi:3d})\n"
+        msg += f"value = {self.pxval:8.1f}\n\n"
 
         for ii, kwd in enumerate(self.mySHM.kwds):
-            msg += "%10s : %10s \n" % (kwd['name'], kwd['value'])
+            msg += f"{kwd['name']:10s} : {kwd['value']:10s} \n"
 
         for i, ptile in enumerate(pt_levels):
-            msg += "p-tile %3d = %8.2f\n" % (ptile, pt_values[i])
+            msg += f"p-tile {ptile:3d} = {pt_values[i]:8.2f}\n"
 
-        msg += "img count  = %8d\n" % (self.mySHM.get_counter(),)
+        msg += f"img count  = {self.mySHM.get_counter():8d}\n"
 
         if add_msg is not None:
-            msg += "%s\n" % (add_msg,)
+            msg += f"{add_msg}\n"
         msg += "</pre>"
         self.lbl_stats.setText(msg)
 
     # =========================================================
     def auto_resize_window(self):
         imsize = self.mySHM.get_data().shape
+        self.imsize = imsize
         imratio = 1.0
         if self.naxis == 2:
             imratio = imsize[1] / imsize[0]
@@ -357,8 +391,9 @@ class MyWindow(QMainWindow):
                             self.myslice]
                     else:
                         if not self.averaging:
-                            self.data_img = self.mySHM.get_data(False, True)[
-                                (mycntr - 1) % self.mySHM.mtdata["size"][0]]
+                            # self.data_img = self.mySHM.get_data(False, True)[
+                            #     (mycntr - 1) % self.mySHM.mtdata["size"][0]]
+                            self.data_img = self.mySHM.get_latest_data_slice()
                         else:
                             self.data_img = self.mySHM.get_data(False, True).mean(0)
 
